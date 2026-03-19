@@ -5,7 +5,7 @@ import shutil
 import os
 from playwright.async_api import async_playwright
 from src.utils.env_data import ENVDATA
-from src.login.standalone_onelogin_auth import OneLoginAuthenticator
+from src.Onelogin_authentication.standalone_onelogin_auth import OneLoginAuthenticator
 from src.utils.setting import USER_DATA_DIR, base_url
 from src.utils.logger import setup_logger
 from src.modmed.process_statements import process_patient_statements
