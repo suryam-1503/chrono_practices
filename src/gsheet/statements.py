@@ -50,9 +50,14 @@ def get_mrn_rows():
     headers = sheet.row_values(1)
 
     try:
-        mrn_col = headers.index("MRN") + 1
+          mrn_col = headers.index("MRN") + 1
     except ValueError:
-        raise Exception("Column 'MRN' not found in Google Sheet")
+          raise Exception("Column 'MRN' not found in Google Sheet")
+
+    try:
+        balance_col = headers.index("Stmt Balance") + 1
+    except ValueError:
+        raise Exception("Column 'Stmt Balance' not found in Google Sheet")
 
     rows = sheet.get_all_values()
 
@@ -60,20 +65,23 @@ def get_mrn_rows():
 
     for i, row in enumerate(rows[1:], start=2):
 
-        if len(row) >= mrn_col:
+        # Ensure row has enough columns
+        if len(row) >= max(mrn_col, balance_col):
 
-            mrn = row[mrn_col - 1]
+            mrn = row[mrn_col - 1].strip()
+            balance = row[balance_col - 1].strip()
 
             if mrn:
                 mrn_data.append({
                     "mrn": mrn,
+                    "balance": balance,
                     "row": i
                 })
 
     return mrn_data
 
 
-def update_download_status(row):
+def update_download_status(row, status):
 
     sheet = get_sheet()
 
@@ -84,6 +92,6 @@ def update_download_status(row):
     except ValueError:
         raise Exception("Column 'Downloading Status' not found")
 
-    sheet.update_cell(row, status_col, "Download Completed")
+    sheet.update_cell(row, status_col, status)
 
-    logger.info(f"Updated Downloading Status at row {row}")
+    logger.info(f"Updated row {row} with status: {status}")
