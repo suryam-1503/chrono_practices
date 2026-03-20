@@ -5,6 +5,7 @@ from playwright.async_api import Page
 from src.gsheet.statements import get_mrn_rows, update_download_status
 from src.utils.logger import setup_logger
 from src.utils.stop_signal import check_stop_flag
+from src.utils.runtime_state import current_task
 
 logger = setup_logger(__name__)
 DOWNLOAD_DIR = Path.home() / "Documents" / "Arya -chrono"
@@ -90,10 +91,12 @@ async def find_matching_row(page: Page, mrn: str, balance: str):
 async def safe_sleep(seconds):
     for _ in range(int(seconds * 10)):
         if check_stop_flag():
+            current_task["stage"] = "stopped"  
             logger.info("Stopped during sleep")
             return False
         await asyncio.sleep(0.1)
     return True
+
 
 async def process_patient_statements(page: Page):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -103,7 +106,11 @@ async def process_patient_statements(page: Page):
 
     for item in mrn_rows:
 
+        current_task["chart_id"] = item["mrn"]
+        current_task["stage"] = "starting"
+
         if check_stop_flag():
+            current_task["stage"] = "stopped"
             logger.info("Stopping MRN processing")
             return
         
@@ -114,6 +121,8 @@ async def process_patient_statements(page: Page):
         for attempt in range(3):
             try:
                 logger.info(f"Processing MRN: {mrn} (Attempt {attempt+1})")
+
+                current_task["stage"] = "searching patient"
 
                 # --- Search patient ---
                 await page.fill("#id-patient-search", "")
@@ -139,6 +148,8 @@ async def process_patient_statements(page: Page):
 
                 if count == 0:
                     raise Exception("No rows found")
+                
+                current_task["stage"] = "matching record"
 
                 
 
@@ -156,6 +167,8 @@ async def process_patient_statements(page: Page):
                     update_download_status(row, "Balance not matching")
                     break
 
+                current_task["stage"] = "opening preview"
+
                 # --- Click Preview (CORRECT WAY) ---
                 preview_btn = matched_row.locator("a.btn-link:has-text('Preview')")
 
@@ -172,6 +185,8 @@ async def process_patient_statements(page: Page):
 
                 await asyncio.sleep(4)
 
+                current_task["stage"] = "downloading pdf"
+
                 # --- Get PDF tab ---
                 pdf_page = await get_pdf_page(page)
 
@@ -180,6 +195,8 @@ async def process_patient_statements(page: Page):
 
                 # --- Update Sheet ---
                 update_download_status(row, "Download Completed")
+
+                current_task["stage"] = "completed"
                 
                 logger.info(f"Updated Google Sheet for row {row}")
 
@@ -191,6 +208,7 @@ async def process_patient_statements(page: Page):
                 break
 
             except Exception as e:
+                current_task["stage"] = "failed"
                 logger.error(f"Attempt {attempt+1} failed for MRN {mrn}: {e}")
 
                 if attempt == 2:
@@ -198,6 +216,9 @@ async def process_patient_statements(page: Page):
                     update_download_status(row, "Download failed")
                 else:
                     await asyncio.sleep(3)
+
+    current_task["chart_id"] = None
+    current_task["stage"] = "idle"
 
     logger.info("Process completed for all MRNs.")
 

@@ -4,6 +4,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from src.modmed.modmed_claims_main import run_workflow, stop_workflow, check_stop_flag_status
 from src.utils.logger import LOG_FILE, setup_logger
+from src.utils.runtime_state import current_task
 
 logger = setup_logger(__name__)
 app = FastAPI(title="ModMed Automation API")
@@ -48,6 +49,10 @@ def automation_status():
     if automation_running and not check_stop_flag_status():
         return {"status": "running"}
     return {"status": "stopped"}
+
+@app.get("/current-chart")
+def get_current_chart():
+    return current_task
 
 
 @app.get("/logs")
