@@ -4,6 +4,7 @@ from pathlib import Path
 from playwright.async_api import Page
 from src.gsheet.statements import get_mrn_rows, update_download_status
 from src.utils.logger import setup_logger
+from src.utils.stop_signal import check_stop_flag
 
 logger = setup_logger(__name__)
 DOWNLOAD_DIR = Path.home() / "Documents" / "Arya -chrono"
@@ -86,6 +87,14 @@ async def find_matching_row(page: Page, mrn: str, balance: str):
     return None, "MRN_NOT_FOUND"
 
 
+async def safe_sleep(seconds):
+    for _ in range(int(seconds * 10)):
+        if check_stop_flag():
+            logger.info("Stopped during sleep")
+            return False
+        await asyncio.sleep(0.1)
+    return True
+
 async def process_patient_statements(page: Page):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -93,6 +102,11 @@ async def process_patient_statements(page: Page):
     logger.info(f"Total MRNs to process: {len(mrn_rows)}")
 
     for item in mrn_rows:
+
+        if check_stop_flag():
+            logger.info("Stopping MRN processing")
+            return
+        
         mrn = item["mrn"]
         balance = item["balance"]
         row = item["row"]
@@ -105,22 +119,27 @@ async def process_patient_statements(page: Page):
                 await page.fill("#id-patient-search", "")
                 await page.fill("#id-patient-search", mrn)
 
-                await page.wait_for_timeout(1500)
+                if not await safe_sleep(1.5): return
+
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
 
-                await page.wait_for_timeout(1000)
+                if not await safe_sleep(1): return
+
                 await page.locator("button.btn-primary:has-text('Search')").click()
 
-                # Wait for results
                 await page.wait_for_load_state("networkidle")
+
+                if not await safe_sleep(2): return
 
                 rows = page.locator("table tbody tr")
                 await rows.first.wait_for(state="attached", timeout=20000)
 
-                await asyncio.sleep(2)
-
                 count = await rows.count()
+
+                if count == 0:
+                    raise Exception("No rows found")
+
                 
 
                 if count == 0:
@@ -141,6 +160,7 @@ async def process_patient_statements(page: Page):
                 preview_btn = matched_row.locator("a.btn-link:has-text('Preview')")
 
                 await preview_btn.wait_for(state="visible", timeout=10000)
+
                 await preview_btn.scroll_into_view_if_needed()
 
                 try:
@@ -160,6 +180,7 @@ async def process_patient_statements(page: Page):
 
                 # --- Update Sheet ---
                 update_download_status(row, "Download Completed")
+                
                 logger.info(f"Updated Google Sheet for row {row}")
 
                 # Close PDF tab
@@ -180,4 +201,3 @@ async def process_patient_statements(page: Page):
 
     logger.info("Process completed for all MRNs.")
 
-    
