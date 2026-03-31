@@ -42,56 +42,128 @@ def get_sheet():
 
     return sheet
 
-
-def get_mrn_rows():
-
+def get_all_rows():
     sheet = get_sheet()
-
     headers = sheet.row_values(1)
+    data = sheet.get_all_values()
 
-    try:
-          mrn_col = headers.index("MRN") + 1
-    except ValueError:
-          raise Exception("Column 'MRN' not found in Google Sheet")
+    all_rows = []
 
-    try:
-        balance_col = headers.index("Stmt Balance") + 1
-    except ValueError:
-        raise Exception("Column 'Stmt Balance' not found in Google Sheet")
+    for i, row in enumerate(data[1:], start=2):
+        row_dict = {}
 
-    rows = sheet.get_all_values()
+        for j, header in enumerate(headers):
+            if j < len(row):
+                row_dict[header] = row[j]
+            else:
+                row_dict[header] = ""
+
+        row_dict["row_number"] = i
+        all_rows.append(row_dict)
+
+    return all_rows
+
+def get_mrn_rows(practice_name):
+    rows = get_all_rows()
 
     mrn_data = []
 
-    for i, row in enumerate(rows[1:], start=2):
+    for row in rows:
+        practice = str(row.get("Practice", "")).strip()
+        download_flag = str(row.get("Download", "")).strip().upper()
+        status = str(row.get("Downloading Status", "")).strip().lower()
 
-        # Ensure row has enough columns
-        if len(row) >= max(mrn_col, balance_col):
-
-            mrn = row[mrn_col - 1].strip()
-            balance = row[balance_col - 1].strip()
+        if (
+            practice == practice_name and
+            download_flag == "YES" and
+            status != "file downloaded"
+        ):
+            mrn = str(row.get("MRN", "")).strip()
+            balance = str(row.get("Stmt Balance", "")).strip()  
+            row_number = row["row_number"]
 
             if mrn:
                 mrn_data.append({
                     "mrn": mrn,
                     "balance": balance,
-                    "row": i
+                    "row": row_number
                 })
 
     return mrn_data
 
-
-def update_download_status(row, status):
-
-    sheet = get_sheet()
-
-    headers = sheet.row_values(1)
-
+def update_download_status(row: int, status: str = "No"):
     try:
+        sheet = get_sheet()
+
+        # Clean headers (avoid space issues)
+        headers = [h.strip() for h in sheet.row_values(1)]
+
+        if "Downloading Status" not in headers:
+            raise Exception("Column 'Downloading Status' not found")
+
         status_col = headers.index("Downloading Status") + 1
-    except ValueError:
-        raise Exception("Column 'Downloading Status' not found")
+        download_col = headers.index("Download") + 1
 
-    sheet.update_cell(row, status_col, status)
+        sheet.update_cell(row, status_col, status)
 
-    logger.info(f"Updated row {row} with status: {status}")
+        if status in ["File Downloaded", "Balance not matching"]:
+             sheet.update_cell(row, download_col, "No")
+
+        logger.info(f"Row {row} updated - Status: {status}, Download handled")
+
+    except Exception as e:
+        logger.error(f" Failed to update row {row}: {e}")
+
+
+async def process_practice(row_data):
+    # Example dummy logic (replace with real)
+    if "download" in row_data.lower():
+        return "File Downloaded"
+    elif "mismatch" in row_data.lower():
+        return "Balance not matching"
+    else:
+        return "Skipped"
+
+
+# 🔹 Main workflow loop
+async def process_all_rows(rows):
+    """
+    rows = list of row data from sheet
+    """
+
+    for i, row in enumerate(rows):
+        row_number = i + 2  # because row 1 = header
+
+        try:
+            logger.info(f" Processing row {row_number}")
+
+            result = await process_practice(row)
+
+            logger.info(f"Result for row {row_number}: {result}")
+
+            #  ONLY update for these two cases
+            if result and result.strip().lower() in [
+                "file downloaded",
+                "balance not matching",
+            ]:
+                update_download_status(row_number, result)
+
+            #  Do nothing for skipped / errors
+
+        except Exception as e:
+            logger.error(f" Error processing row {row_number}: {e}")
+
+
+def get_practices_to_run():
+    rows = get_all_rows()  # your existing sheet reader
+
+    practices = set()
+
+    for row in rows:
+        practice = str(row.get("Practice", "")).strip()
+        download_flag = str(row.get("Download", "")).strip().upper()
+
+        if download_flag == "YES" and practice:
+            practices.add(practice)
+
+    return list(practices)    

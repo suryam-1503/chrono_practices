@@ -1,4 +1,5 @@
 # src/modmed/modmed_main.py
+
 import asyncio
 import json
 import shutil
@@ -11,6 +12,7 @@ from src.Onelogin_authentication.standalone_onelogin_auth import OneLoginAuthent
 from src.modmed.process_statements import process_patient_statements
 from src.utils.stop_signal import stop_event, reset_stop, check_stop_flag
 from playwright.async_api import async_playwright
+from src.gsheet.statements import get_practices_to_run
 
 logger = setup_logger(__name__)
 
@@ -20,7 +22,6 @@ json_path = BASE_DIR / "app" / "app_id.json"
 with open(json_path, "r") as f:
     practices = json.load(f)
 
-practice_name, practice_id = list(practices.items())[0]
 
 async def safe_wait(ms: int):
     steps = int(ms / 100)
@@ -30,7 +31,6 @@ async def safe_wait(ms: int):
             return False
         await asyncio.sleep(0.1)
     return True
-
 
 
 async def modmed_workflow():
@@ -54,7 +54,9 @@ async def modmed_workflow():
                 headless=False,
                 user_data_dir=USER_DATA_DIR,
                 enable_extension=True,
-                target_app_url="dummy"
+                target_app_url="dummy",
+
+          
             ) as auth:
 
                 await auth.authenticate()
@@ -64,53 +66,72 @@ async def modmed_workflow():
                     return
 
                 page = auth.page
-                
+
                 if page is None:
                     raise Exception("Authentication failed")
 
                 logger.info("Login successful")
 
-                full_url = f"{base_url}{practice_id}"
-                await page.goto(full_url)
+                # FIX: LOOP ALL PRACTICES
+                practices_to_run = get_practices_to_run()
 
-                if not await safe_wait(5000):
-                    return
+                logger.info(f"Practices to run from sheet: {practices_to_run}")
 
-                logger.info("ModMed page loaded")
+                for practice_name in practices_to_run:
 
-                # Dropdown
-                await page.click("span.caret")
-                if check_stop_flag(): return
+                    if practice_name not in practices:
+                        logger.warning(f"{practice_name} not found in app_id.json → skipping")
+                        continue
 
-                await page.wait_for_selector('a[data-account="practicegroup"]')
+                    practice_id = practices[practice_name]
 
-                if not await safe_wait(2000):
-                    return
+                    logger.info(f"Starting practice: {practice_name}")
 
-                await page.click('a[data-account="practicegroup"]')
+                    if check_stop_flag():
+                        return
 
-                if not await safe_wait(3000):
-                    return
+                    # --- Open Practice ---
+                    full_url = f"{base_url}{practice_id}"
+                    await page.goto(full_url)
 
-                # Billing
-                await page.click('a[href="/billing/billing_summary"]')
+                    if not await safe_wait(5000):
+                        return
 
-                if not await safe_wait(3000):
-                    return
+                    logger.info("ModMed page loaded")
 
-                # Patient Statements
-                await page.click('a[href="/billing/patient_statements"]')
+                    # Dropdown
+                    await page.click("span.caret")
+                    if check_stop_flag(): return
 
-                if not await safe_wait(3000):
-                    return
+                    await page.wait_for_selector('a[data-account="practicegroup"]')
 
-                logger.info("Patient Statements page opened")
+                    if not await safe_wait(2000):
+                        return
 
-                if check_stop_flag():
-                    return
+                    await page.click('a[data-account="practicegroup"]')
 
-                await process_patient_statements(page)
+                    if not await safe_wait(3000):
+                        return
 
+                    # Billing
+                    await page.click('a[href="/billing/billing_summary"]')
+
+                    if not await safe_wait(3000):
+                        return
+
+                    # Patient Statements
+                    await page.click('a[href="/billing/patient_statements"]')
+
+                    if not await safe_wait(3000):
+                        return
+
+                    logger.info("Patient Statements page opened")
+
+                    if check_stop_flag():
+                        return
+
+                    #FIX: pass practice_name
+                    await process_patient_statements(page, practice_name)
 
     finally:
         try:

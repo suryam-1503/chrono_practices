@@ -28,7 +28,6 @@ async def get_pdf_page(page: Page):
 
 async def download_pdf(pdf_page: Page, mrn: str):
     
-
     pdf_url = pdf_page.url
 
     if not pdf_url.startswith("http"):
@@ -50,7 +49,6 @@ async def download_pdf(pdf_page: Page, mrn: str):
 
 async def find_matching_row(page: Page, mrn: str, balance: str):
     
-
     table = page.locator("div.table_container table").first
     rows = table.locator("tbody tr")
 
@@ -63,18 +61,15 @@ async def find_matching_row(page: Page, mrn: str, balance: str):
 
         cell_count = await cells.count()
 
-        # Safety check
         if cell_count < 14:
             continue
 
-        #  Based on YOUR table structure
         chart_id = (await cells.nth(2).inner_text()).strip()
         stmt_bal = (await cells.nth(12).inner_text()).strip()
 
         if chart_id == mrn:
             logger.info(f"MRN matched: {mrn}")
 
-            # Normalize balance (remove - sign differences)
             clean_ui_bal = stmt_bal.replace("-", "").strip()
             clean_sheet_bal = balance.replace("-", "").strip()
 
@@ -91,17 +86,17 @@ async def find_matching_row(page: Page, mrn: str, balance: str):
 async def safe_sleep(seconds):
     for _ in range(int(seconds * 10)):
         if check_stop_flag():
-            current_task["stage"] = "stopped"  
+            current_task["stage"] = "stopped"
             logger.info("Stopped during sleep")
             return False
         await asyncio.sleep(0.1)
     return True
 
 
-async def process_patient_statements(page: Page):
+async def process_patient_statements(page: Page, practice_name: str):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-    mrn_rows = get_mrn_rows()
+    mrn_rows = get_mrn_rows(practice_name)
     logger.info(f"Total MRNs to process: {len(mrn_rows)}")
 
     for item in mrn_rows:
@@ -137,24 +132,31 @@ async def process_patient_statements(page: Page):
 
                 await page.locator("button.btn-primary:has-text('Search')").click()
 
-                await page.wait_for_load_state("networkidle")
+                # --- SAFE PAGE LOAD ---
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except:
+                    logger.warning("Page load timeout, continuing...")
 
                 if not await safe_sleep(2): return
 
+                # --- SAFE TABLE WAIT ---
                 rows = page.locator("table tbody tr")
-                await rows.first.wait_for(state="attached", timeout=20000)
 
-                count = await rows.count()
+                found = False
+                for _ in range(10):  # wait up to ~10 seconds
+                    count = await rows.count()
+                    if count > 0:
+                        found = True
+                        break
+                    await asyncio.sleep(1)
 
-                if count == 0:
-                    raise Exception("No rows found")
-                
                 current_task["stage"] = "matching record"
 
-                
-
-                if count == 0:
-                        raise Exception("No rows found after search")
+                if not found:
+                    logger.warning(f"No results for MRN {mrn}")
+                    update_download_status(row, "MRN not found")
+                    break
 
                 # --- Find matching row ---
                 matched_row, status = await find_matching_row(page, mrn, balance)
@@ -169,10 +171,11 @@ async def process_patient_statements(page: Page):
 
                 current_task["stage"] = "opening preview"
 
-                # --- Click Preview (CORRECT WAY) ---
+                # --- Preview Button ---
                 preview_btn = matched_row.locator("a.btn-link:has-text('Preview')")
 
-                await preview_btn.wait_for(state="visible", timeout=10000)
+                if not await preview_btn.is_visible():
+                    raise Exception("Preview button not visible")
 
                 await preview_btn.scroll_into_view_if_needed()
 
@@ -180,7 +183,7 @@ async def process_patient_statements(page: Page):
                     await preview_btn.click(timeout=5000)
                     logger.info("Preview clicked (normal)")
                 except:
-                    logger.warning("Normal click failed → using force click")
+                    logger.warning("Normal click failed  using force click")
                     await preview_btn.click(force=True)
 
                 await asyncio.sleep(4)
@@ -194,15 +197,18 @@ async def process_patient_statements(page: Page):
                 await download_pdf(pdf_page, mrn)
 
                 # --- Update Sheet ---
-                update_download_status(row, "Download Completed")
+                update_download_status(row, "File Downloaded")
 
                 current_task["stage"] = "completed"
                 
                 logger.info(f"Updated Google Sheet for row {row}")
 
+                await asyncio.sleep(5)
+
                 # Close PDF tab
                 if pdf_page != page:
                     await pdf_page.close()
+                    logger.info("PDF tab closed after 5 seconds")
 
                 await asyncio.sleep(2)
                 break
@@ -221,4 +227,3 @@ async def process_patient_statements(page: Page):
     current_task["stage"] = "idle"
 
     logger.info("Process completed for all MRNs.")
-
